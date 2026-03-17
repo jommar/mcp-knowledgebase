@@ -235,6 +235,7 @@ export async function getTables(page = 1, limit = DEFAULT_LIMIT, compact = false
 
 /**
  * Search for tables or columns by name pattern
+ * Optimized: Only runs count queries when needed, and uses DISTINCT to prevent duplicates
  * @param {string} pattern - Search pattern
  * @param {string} type - Search type: 'tables', 'columns', or 'all'
  * @param {number} page - Page number (1-indexed)
@@ -260,8 +261,20 @@ export async function searchTables(pattern, type = 'all', page = 1, limit = DEFA
   let totalColumns = 0;
   
   try {
-    // Get counts first
-    if (type === 'tables' || type === 'all') {
+    // OPTIMIZATION: Only run count queries when fetching data
+    // Count and fetch tables in one query when type is 'tables'
+    if (type === 'tables') {
+      const tableSql = `
+        SELECT TABLE_NAME, TABLE_COMMENT
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = ?
+          AND (TABLE_NAME LIKE ? OR TABLE_COMMENT LIKE ?)
+        ORDER BY TABLE_NAME
+        LIMIT ${safeLimit} OFFSET ${offset}
+      `;
+      const tableResults = await executeQuery(tableSql, [dbName, searchPattern, searchPattern], QUERY_TIMEOUT);
+      
+      // Get count for pagination
       const tableCountSql = `
         SELECT COUNT(*) as total
         FROM INFORMATION_SCHEMA.TABLES
@@ -270,22 +283,76 @@ export async function searchTables(pattern, type = 'all', page = 1, limit = DEFA
       `;
       const tableCountResult = await executeQuery(tableCountSql, [dbName, searchPattern, searchPattern], QUERY_TIMEOUT);
       totalTables = tableCountResult[0]?.total || 0;
+      
+      if (compact) {
+        results.tables = tableResults.map(t => t.TABLE_NAME);
+      } else {
+        results.tables = tableResults.map(t => ({
+          name: t.TABLE_NAME,
+          comment: t.TABLE_COMMENT,
+        }));
+      }
     }
-    
-    if (type === 'columns' || type === 'all') {
+    // Count and fetch columns in one query when type is 'columns'
+    else if (type === 'columns') {
+      const columnSql = `
+        SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_COMMENT
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = ?
+          AND (COLUMN_NAME LIKE ? OR COLUMN_COMMENT LIKE ?)
+        ORDER BY TABLE_NAME, ORDINAL_POSITION
+        LIMIT ${safeLimit} OFFSET ${offset}
+      `;
+      const columnResults = await executeQuery(columnSql, [dbName, searchPattern, searchPattern], QUERY_TIMEOUT);
+      
+      // Get count for pagination - use DISTINCT to prevent duplicates
       const columnCountSql = `
-        SELECT COUNT(*) as total
+        SELECT COUNT(DISTINCT TABLE_NAME, COLUMN_NAME) as total
         FROM INFORMATION_SCHEMA.COLUMNS
         WHERE TABLE_SCHEMA = ?
           AND (COLUMN_NAME LIKE ? OR COLUMN_COMMENT LIKE ?)
       `;
       const columnCountResult = await executeQuery(columnCountSql, [dbName, searchPattern, searchPattern], QUERY_TIMEOUT);
       totalColumns = columnCountResult[0]?.total || 0;
+      
+      if (compact) {
+        results.columns = columnResults.map(c => ({
+          t: c.TABLE_NAME,
+          n: c.COLUMN_NAME,
+          ty: c.DATA_TYPE,
+        }));
+      } else {
+        results.columns = columnResults.map(c => ({
+          table: c.TABLE_NAME,
+          name: c.COLUMN_NAME,
+          type: c.DATA_TYPE,
+          comment: c.COLUMN_COMMENT,
+        }));
+      }
     }
-    
-    const totalResults = totalTables + totalColumns;
-    
-    if (type === 'tables' || type === 'all') {
+    // For 'all' type, run both queries with proper counts
+    else {
+      // Get table count
+      const tableCountSql = `
+        SELECT COUNT(*) as total
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = ?
+          AND (TABLE_NAME LIKE ? OR TABLE_COMMENT LIKE ?)
+      `;
+      const tableCountResult = await executeQuery(tableCountSql, [dbName, searchPattern, searchPattern], QUERY_TIMEOUT);
+      totalTables = tableCountResult[0]?.total || 0;
+      
+      // Get column count - use DISTINCT to prevent duplicates
+      const columnCountSql = `
+        SELECT COUNT(DISTINCT TABLE_NAME, COLUMN_NAME) as total
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = ?
+          AND (COLUMN_NAME LIKE ? OR COLUMN_COMMENT LIKE ?)
+      `;
+      const columnCountResult = await executeQuery(columnCountSql, [dbName, searchPattern, searchPattern], QUERY_TIMEOUT);
+      totalColumns = columnCountResult[0]?.total || 0;
+      
+      // Fetch tables
       const tableSql = `
         SELECT TABLE_NAME, TABLE_COMMENT
         FROM INFORMATION_SCHEMA.TABLES
@@ -304,9 +371,8 @@ export async function searchTables(pattern, type = 'all', page = 1, limit = DEFA
           comment: t.TABLE_COMMENT,
         }));
       }
-    }
-    
-    if (type === 'columns' || type === 'all') {
+      
+      // Fetch columns
       const columnSql = `
         SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_COMMENT
         FROM INFORMATION_SCHEMA.COLUMNS
@@ -333,6 +399,7 @@ export async function searchTables(pattern, type = 'all', page = 1, limit = DEFA
       }
     }
     
+    const totalResults = totalTables + totalColumns;
     const hasMore = offset + results.tables.length + results.columns.length < totalResults;
     
     return {
