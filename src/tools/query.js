@@ -121,6 +121,8 @@ export async function rawQuery(query, page = 1, limit = MAX_ROWS_PER_PAGE) {
       }
     }
     
+    const hasMore = totalCount !== null ? offset + rows.length < totalCount : rows.length === safeLimit;
+    
     return {
       success: true,
       data: rows,
@@ -129,7 +131,9 @@ export async function rawQuery(query, page = 1, limit = MAX_ROWS_PER_PAGE) {
         limit: safeLimit,
         rowCount: rows.length,
         totalCount,
-        hasMore: totalCount !== null ? offset + rows.length < totalCount : rows.length === safeLimit,
+        hasMore,
+        // Breadcrumbs: hint for the model when more results are available
+        hint: hasMore ? `There are more rows available. Use page ${safePage + 1} to see more.` : null,
       },
     };
   } catch (error) {
@@ -183,6 +187,8 @@ export async function getTables(page = 1, limit = DEFAULT_LIMIT, compact = false
   try {
     const rows = await executeQuery(sql, [dbName], QUERY_TIMEOUT);
     
+    const hasMore = offset + rows.length < totalTables;
+    
     if (compact) {
       return {
         success: true,
@@ -190,7 +196,9 @@ export async function getTables(page = 1, limit = DEFAULT_LIMIT, compact = false
           page: safePage,
           limit: safeLimit,
           totalCount: totalTables,
-          hasMore: offset + rows.length < totalTables,
+          hasMore,
+          // Breadcrumbs: hint for the model when more results are available
+          hint: hasMore ? `There are more tables available. Use page ${safePage + 1} to see more.` : null,
         },
         tables: rows.map(row => ({
           n: row.TABLE_NAME,
@@ -205,7 +213,9 @@ export async function getTables(page = 1, limit = DEFAULT_LIMIT, compact = false
         page: safePage,
         limit: safeLimit,
         totalCount: totalTables,
-        hasMore: offset + rows.length < totalTables,
+        hasMore,
+        // Breadcrumbs: hint for the model when more results are available
+        hint: hasMore ? `There are more tables available. Use page ${safePage + 1} to see more.` : null,
       },
       tables: rows.map(row => ({
         name: row.TABLE_NAME,
@@ -323,6 +333,8 @@ export async function searchTables(pattern, type = 'all', page = 1, limit = DEFA
       }
     }
     
+    const hasMore = offset + results.tables.length + results.columns.length < totalResults;
+    
     return {
       success: true,
       pattern,
@@ -334,7 +346,9 @@ export async function searchTables(pattern, type = 'all', page = 1, limit = DEFA
           tables: totalTables,
           columns: totalColumns,
         },
-        hasMore: offset + results.tables.length + results.columns.length < totalResults,
+        hasMore,
+        // Breadcrumbs: hint for the model when more results are available
+        hint: hasMore ? `There are more results available. Use page ${safePage + 1} to see more.` : null,
       },
       ...results,
     };

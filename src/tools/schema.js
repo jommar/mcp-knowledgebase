@@ -71,7 +71,8 @@ export async function getSchema(page = 1, limit = DEFAULT_LIMIT, compact = false
       COLUMN_TYPE,
       COLUMN_DEFAULT,
       COLUMN_COMMENT,
-      ORDINAL_POSITION
+      ORDINAL_POSITION,
+      COLUMN_KEY
     FROM 
       INFORMATION_SCHEMA.COLUMNS
     WHERE 
@@ -128,10 +129,13 @@ export async function getSchema(page = 1, limit = DEFAULT_LIMIT, compact = false
         default: row.COLUMN_DEFAULT,
         comment: row.COLUMN_COMMENT,
         position: row.ORDINAL_POSITION,
+        key: row.COLUMN_KEY || null, // Composite PK Awareness: include key info
       });
     }
   }
 
+  const hasMore = offset + tableNames.length < totalTables;
+  
   return {
     success: true,
     database: dbName,
@@ -139,7 +143,9 @@ export async function getSchema(page = 1, limit = DEFAULT_LIMIT, compact = false
       page: safePage,
       limit: safeLimit,
       totalCount: totalTables,
-      hasMore: offset + tableNames.length < totalTables,
+      hasMore,
+      // Breadcrumbs: hint for the model when more results are available
+      hint: hasMore ? `There are more tables available. Use page ${safePage + 1} to see more.` : null,
     },
     tables: Object.values(schema),
   };
@@ -263,6 +269,8 @@ export async function getKeys(page = 1, limit = DEFAULT_LIMIT, keyType = 'all') 
     });
   }
 
+  const hasMore = offset + primaryKeys.length + foreignKeys.length + uniqueKeys.length < totalKeys;
+  
   return {
     success: true,
     database: dbName,
@@ -275,7 +283,9 @@ export async function getKeys(page = 1, limit = DEFAULT_LIMIT, keyType = 'all') 
         foreign: totalForeign,
         unique: totalUnique,
       },
-      hasMore: offset + primaryKeys.length + foreignKeys.length + uniqueKeys.length < totalKeys,
+      hasMore,
+      // Breadcrumbs: hint for the model when more results are available
+      hint: hasMore ? `There are more keys available. Use page ${safePage + 1} to see more.` : null,
     },
     keyType,
     primaryKeys: primaryKeys.map(pk => ({
