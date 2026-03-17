@@ -1,0 +1,4 @@
+user: admin
+pass: secret
+host: 127.0.0.1:3306
+db: ez_ccsd1wy
