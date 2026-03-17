@@ -34,25 +34,58 @@ function createServer() {
     }
   );
 
-  // Set up the tools request handler
+      // Set up the tools request handler
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
       tools: [
         {
           name: 'get_schema',
-          description: 'Get the complete database schema for all tables. This includes table names, column names, data types, nullable status, defaults, and comments. Use this to understand the database structure before writing queries.',
+          description: 'Get the complete database schema for all tables. This includes table names, column names, data types, nullable status, defaults, and comments. Use this to understand the database structure before writing queries. Paginated to prevent token overflow.',
           inputSchema: {
             type: 'object',
-            properties: {},
+            properties: {
+              page: {
+                type: 'number',
+                description: 'Page number for pagination (1-indexed). Default: 1',
+                default: 1,
+              },
+              limit: {
+                type: 'number',
+                description: 'Number of tables per page. Default: 50, Max: 200',
+                default: 50,
+              },
+              compact: {
+                type: 'boolean',
+                description: 'Use compact format with abbreviated field names (n, t) to reduce token usage. Default: false',
+                default: false,
+              },
+            },
             required: [],
           },
         },
         {
           name: 'get_keys',
-          description: 'Get all keys (primary, foreign, unique) for all tables. This helps understand table relationships for JOIN operations. Returns primary keys, foreign keys, unique keys, and a relationships map showing how tables connect.',
+          description: 'Get all keys (primary, foreign, unique) for all tables. This helps understand table relationships for JOIN operations. Returns primary keys, foreign keys, unique keys, and a relationships map showing how tables connect. Paginated to prevent token overflow.',
           inputSchema: {
             type: 'object',
-            properties: {},
+            properties: {
+              page: {
+                type: 'number',
+                description: 'Page number for pagination (1-indexed). Default: 1',
+                default: 1,
+              },
+              limit: {
+                type: 'number',
+                description: 'Number of keys per page. Default: 50, Max: 200',
+                default: 50,
+              },
+              keyType: {
+                type: 'string',
+                description: 'Filter by key type: "primary", "foreign", "unique", or "all". Default: all',
+                enum: ['primary', 'foreign', 'unique', 'all'],
+                default: 'all',
+              },
+            },
             required: [],
           },
         },
@@ -96,16 +129,32 @@ function createServer() {
         },
         {
           name: 'get_tables',
-          description: 'Get a list of all tables in the database with their metadata (type, comment, engine, row count).',
+          description: 'Get a list of all tables in the database with their metadata (type, comment, engine, row count). Paginated to prevent token overflow.',
           inputSchema: {
             type: 'object',
-            properties: {},
+            properties: {
+              page: {
+                type: 'number',
+                description: 'Page number for pagination (1-indexed). Default: 1',
+                default: 1,
+              },
+              limit: {
+                type: 'number',
+                description: 'Number of tables per page. Default: 50, Max: 1000',
+                default: 50,
+              },
+              compact: {
+                type: 'boolean',
+                description: 'Use compact format with abbreviated field names (n, t) to reduce token usage. Default: false',
+                default: false,
+              },
+            },
             required: [],
           },
         },
         {
           name: 'search_tables',
-          description: 'Search for tables or columns by name pattern. Useful for finding specific tables or columns when you don\'t know the exact name.',
+          description: 'Search for tables or columns by name pattern. Useful for finding specific tables or columns when you don\'t know the exact name. Paginated to prevent token overflow.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -118,6 +167,21 @@ function createServer() {
                 description: 'Search type: "tables", "columns", or "all"',
                 enum: ['tables', 'columns', 'all'],
                 default: 'all',
+              },
+              page: {
+                type: 'number',
+                description: 'Page number for pagination (1-indexed). Default: 1',
+                default: 1,
+              },
+              limit: {
+                type: 'number',
+                description: 'Number of results per page. Default: 50, Max: 1000',
+                default: 50,
+              },
+              compact: {
+                type: 'boolean',
+                description: 'Use compact format with abbreviated field names to reduce token usage. Default: false',
+                default: false,
               },
             },
             required: ['pattern'],
@@ -136,11 +200,11 @@ function createServer() {
 
       switch (name) {
         case 'get_schema':
-          result = await schemaTools.getSchema();
+          result = await schemaTools.getSchema(args.page, args.limit, args.compact);
           break;
 
         case 'get_keys':
-          result = await schemaTools.getKeys();
+          result = await schemaTools.getKeys(args.page, args.limit, args.keyType);
           break;
 
         case 'raw_query':
@@ -152,11 +216,11 @@ function createServer() {
           break;
 
         case 'get_tables':
-          result = await queryTools.getTables();
+          result = await queryTools.getTables(args.page, args.limit, args.compact);
           break;
 
         case 'search_tables':
-          result = await queryTools.searchTables(args.pattern, args.type);
+          result = await queryTools.searchTables(args.pattern, args.type, args.page, args.limit, args.compact);
           break;
 
         default:

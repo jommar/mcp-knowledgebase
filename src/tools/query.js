@@ -142,9 +142,28 @@ export async function rawQuery(query, page = 1, limit = MAX_ROWS_PER_PAGE) {
 
 /**
  * Get list of tables in the database
+ * @param {number} page - Page number (1-indexed)
+ * @param {number} limit - Number of tables per page
+ * @param {boolean} compact - Use compact format to reduce token usage
  * @returns {Promise<Object>}
  */
-export async function getTables() {
+export async function getTables(page = 1, limit = DEFAULT_LIMIT, compact = false) {
+  // Sanitize pagination parameters
+  const safePage = Math.max(1, Math.floor(page));
+  const safeLimit = Math.min(MAX_LIMIT, Math.max(1, Math.floor(limit)));
+  const offset = (safePage - 1) * safeLimit;
+  
+  const dbName = process.env.DB_NAME;
+  
+  // Get total count
+  const countSql = `
+    SELECT COUNT(*) as total
+    FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_SCHEMA = ?
+  `;
+  const countResult = await executeQuery(countSql, [dbName], QUERY_TIMEOUT);
+  const totalTables = countResult[0]?.total || 0;
+  
   const sql = `
     SELECT 
       TABLE_NAME,
@@ -155,16 +174,39 @@ export async function getTables() {
     FROM 
       INFORMATION_SCHEMA.TABLES
     WHERE 
-      TABLE_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+      TABLE_SCHEMA = ?
     ORDER BY 
       TABLE_NAME
+    LIMIT ${safeLimit} OFFSET ${offset}
   `;
   
   try {
-    const rows = await executeQuery(sql, [], QUERY_TIMEOUT);
+    const rows = await executeQuery(sql, [dbName], QUERY_TIMEOUT);
+    
+    if (compact) {
+      return {
+        success: true,
+        pagination: {
+          page: safePage,
+          limit: safeLimit,
+          totalCount: totalTables,
+          hasMore: offset + rows.length < totalTables,
+        },
+        tables: rows.map(row => ({
+          n: row.TABLE_NAME,
+          t: row.TABLE_TYPE,
+        })),
+      };
+    }
     
     return {
       success: true,
+      pagination: {
+        page: safePage,
+        limit: safeLimit,
+        totalCount: totalTables,
+        hasMore: offset + rows.length < totalTables,
+      },
       tables: rows.map(row => ({
         name: row.TABLE_NAME,
         type: row.TABLE_TYPE,
@@ -185,51 +227,115 @@ export async function getTables() {
  * Search for tables or columns by name pattern
  * @param {string} pattern - Search pattern
  * @param {string} type - Search type: 'tables', 'columns', or 'all'
+ * @param {number} page - Page number (1-indexed)
+ * @param {number} limit - Number of results per page
+ * @param {boolean} compact - Use compact format to reduce token usage
  * @returns {Promise<Object>}
  */
-export async function searchTables(pattern, type = 'all') {
+export async function searchTables(pattern, type = 'all', page = 1, limit = DEFAULT_LIMIT, compact = false) {
   const searchPattern = `%${pattern}%`;
+  const dbName = process.env.DB_NAME;
+  
+  // Sanitize pagination parameters
+  const safePage = Math.max(1, Math.floor(page));
+  const safeLimit = Math.min(MAX_LIMIT, Math.max(1, Math.floor(limit)));
+  const offset = (safePage - 1) * safeLimit;
+  
   const results = {
     tables: [],
     columns: [],
   };
   
+  let totalTables = 0;
+  let totalColumns = 0;
+  
   try {
+    // Get counts first
+    if (type === 'tables' || type === 'all') {
+      const tableCountSql = `
+        SELECT COUNT(*) as total
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = ?
+          AND (TABLE_NAME LIKE ? OR TABLE_COMMENT LIKE ?)
+      `;
+      const tableCountResult = await executeQuery(tableCountSql, [dbName, searchPattern, searchPattern], QUERY_TIMEOUT);
+      totalTables = tableCountResult[0]?.total || 0;
+    }
+    
+    if (type === 'columns' || type === 'all') {
+      const columnCountSql = `
+        SELECT COUNT(*) as total
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = ?
+          AND (COLUMN_NAME LIKE ? OR COLUMN_COMMENT LIKE ?)
+      `;
+      const columnCountResult = await executeQuery(columnCountSql, [dbName, searchPattern, searchPattern], QUERY_TIMEOUT);
+      totalColumns = columnCountResult[0]?.total || 0;
+    }
+    
+    const totalResults = totalTables + totalColumns;
+    
     if (type === 'tables' || type === 'all') {
       const tableSql = `
         SELECT TABLE_NAME, TABLE_COMMENT
         FROM INFORMATION_SCHEMA.TABLES
-        WHERE TABLE_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+        WHERE TABLE_SCHEMA = ?
           AND (TABLE_NAME LIKE ? OR TABLE_COMMENT LIKE ?)
         ORDER BY TABLE_NAME
+        LIMIT ${safeLimit} OFFSET ${offset}
       `;
-      const tableResults = await executeQuery(tableSql, [searchPattern, searchPattern], QUERY_TIMEOUT);
-      results.tables = tableResults.map(t => ({
-        name: t.TABLE_NAME,
-        comment: t.TABLE_COMMENT,
-      }));
+      const tableResults = await executeQuery(tableSql, [dbName, searchPattern, searchPattern], QUERY_TIMEOUT);
+      
+      if (compact) {
+        results.tables = tableResults.map(t => t.TABLE_NAME);
+      } else {
+        results.tables = tableResults.map(t => ({
+          name: t.TABLE_NAME,
+          comment: t.TABLE_COMMENT,
+        }));
+      }
     }
     
     if (type === 'columns' || type === 'all') {
       const columnSql = `
         SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_COMMENT
         FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+        WHERE TABLE_SCHEMA = ?
           AND (COLUMN_NAME LIKE ? OR COLUMN_COMMENT LIKE ?)
         ORDER BY TABLE_NAME, ORDINAL_POSITION
+        LIMIT ${safeLimit} OFFSET ${offset}
       `;
-      const columnResults = await executeQuery(columnSql, [searchPattern, searchPattern], QUERY_TIMEOUT);
-      results.columns = columnResults.map(c => ({
-        table: c.TABLE_NAME,
-        name: c.COLUMN_NAME,
-        type: c.DATA_TYPE,
-        comment: c.COLUMN_COMMENT,
-      }));
+      const columnResults = await executeQuery(columnSql, [dbName, searchPattern, searchPattern], QUERY_TIMEOUT);
+      
+      if (compact) {
+        results.columns = columnResults.map(c => ({
+          t: c.TABLE_NAME,
+          n: c.COLUMN_NAME,
+          ty: c.DATA_TYPE,
+        }));
+      } else {
+        results.columns = columnResults.map(c => ({
+          table: c.TABLE_NAME,
+          name: c.COLUMN_NAME,
+          type: c.DATA_TYPE,
+          comment: c.COLUMN_COMMENT,
+        }));
+      }
     }
     
     return {
       success: true,
       pattern,
+      pagination: {
+        page: safePage,
+        limit: safeLimit,
+        totalCount: totalResults,
+        counts: {
+          tables: totalTables,
+          columns: totalColumns,
+        },
+        hasMore: offset + results.tables.length + results.columns.length < totalResults,
+      },
       ...results,
     };
   } catch (error) {
